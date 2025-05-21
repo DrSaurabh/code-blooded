@@ -1,0 +1,58 @@
+k-01/
+├── backend/
+│     ├── Dockerfile
+│     └── src/
+│           └── app.py
+├── frontend/
+│     ├── Dockerfile
+│     └── src/
+│           └─templates/
+│           │       └── index.html
+│           └── app.py
+├── kubernetes/
+│     ├── frontend/
+│     │   └── helm-chart/
+│     │          ├── Chart.yaml
+│     │          ├── values.yaml
+│     │          └── templates/
+│     │                  └── deployment.yaml
+│     │                  └── service.yaml
+│     ├── backend/
+│         └── helm-chart/
+│                ├── Chart.yaml
+│                ├── values.yaml
+│                └── templates/
+│                        └── deployment.yaml
+│                        └── service.yaml
+├── scripts/
+│     ├── build-and-load-images.sh
+│     ├── kind-setup.sh
+│     ├── kind-teardown.sh
+│     └── quickstart.sh
+├── .gitignore
+├── README.md
+└── kind-config.yaml
+
+
+
+# For the project you want to build, create the root directory manually.
+# The file containing the project structure (as above) MUST be named "project-structure" (no extension)
+# This file MUST be located in the root directory of the project.
+# Also paste the project-builder.py file in the same directory.
+
+# project-structure file requirements:
+
+# the first line of this file identifies the project root directory and have no indentation
+# the root directory in this document MUST match the actual project root directory name
+
+# visually connect the subdirectories and files to their parent directories
+# using non-alphanumeric characters such as /, |, \, -, +, *, etc.
+# specifically, avoid using 1 or L as art, because art needs to be strictly non-alphanumeric
+
+# This connection should be clear and lead from parent to child 
+# the subdirectories should be indented to show their hierarchy
+# the root and subdirectory names MUST end with a /
+# have at least one clear space between the "art" and the subfolder or file name
+
+# comments are accepted and should start with a # sign
+# filenames extensions are optional
