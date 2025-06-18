@@ -100,6 +100,8 @@ Use the interactive menu to:
 Read the blog for this project on Medium to get a more in-depth overview and some really cool graphics.
 (No blog of mine is behind paywalls and I do not want you to buy me any coffee).
 
+https://medium.com/p/aa8ed9b98c7f
+
 ---
 
 ## 📄 License
