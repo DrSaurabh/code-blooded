@@ -1,3 +1,6 @@
+# version 1.1.0
+# Changelog: added variable "ignore_directories", which will not be part of the printed project tree
+
 import os
 import sys
 from pathlib import Path
@@ -10,6 +13,7 @@ from shutil import rmtree
 restart_quickness = 0.1
 restart_dots = 6
 debugger_mode=False
+ignore_directories = ["__pycache__", ".git", ".vscode", ".idea", ".DS_Store"]
 def debug(*args, **kwargs):
     if debugger_mode: print(*args)
 class Colors:
@@ -225,15 +229,17 @@ def cleanup_project_structure(project_structure_paths, forceful=False):
     print(f"{Colors.YELLOW}{message} cleanup complete.{Colors.RESET}")        
 def print_tree(base_path: Path = Path('.'), prefix: str = ""):
     """Print the directory structure in tree format with colors."""
+    if base_path.name in ignore_directories:
+        return
     try:
         contents = sorted(os.listdir(base_path))
         if not contents:
-            return
-            
+            return            
         pointers = ["├── "] * (len(contents) - 1) + ["└── "]
         
         for pointer, item in zip(pointers, contents):
-            path = base_path / item
+            path = base_path / item # / operator to concatenate the base_path and item to form a new path.
+            if path.name in ignore_directories: continue
             if path.is_dir():
                 color = Colors.YELLOW
             else:
