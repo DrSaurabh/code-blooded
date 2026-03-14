@@ -1,0 +1,23 @@
+{
+  "monitors": [
+    {
+      "name": "Google Main",
+      "url": "https://www.google.com",
+      "interval": 60
+    },
+    {
+      "name": "Google Valid Keyword Search",
+      "type": "keyword",
+      "url": "https://www.google.com",
+      "interval": 60,
+      "keyword": "I'm Feeling Lucky"
+    },
+    {
+      "name": "Google Bad Keyword Search",
+      "type": "keyword",
+      "url": "https://www.google.com",
+      "interval": 300,
+      "keyword": "howsthatforalongandnonsensekeyword"
+    }
+  ]
+}
