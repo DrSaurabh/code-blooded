@@ -1,0 +1,391 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: |
+  [ v1.11.0 ] 17 Mar 2026 - for setup of Uptime Kuma and its initialization.
+  Remember to resolve DNS using the DomainName parameter and the elastic IP address created by this template.
+  Keep ProjectName, Disambiguation and Environment parameters consistent across all three Kuma templates to ensure proper resource linking.
+  Architecture: ARM64 (Graviton). OS: Amazon Linux 2023.
+  Suggested stackname: uptime-kuma-ec2-stack
+
+Parameters:
+
+  DomainName:
+    Type: String
+    Description: The FQDN for the Uptime Kuma instance (e.g., kuma.yourdomain.com). Caddy will use this for SSL.
+  ProjectName:
+    Type: String
+    Default: uptime-kuma
+    Description: Mandatory tag. Name of the project (lowercase only, hyphens allowed).
+  Disambiguation:
+    Type: String
+    Default: batman-01
+    Description: Disambiguation string to ensure unique resource names. (lowercase only, hyphens allowed).
+  Environment:
+    Type: String
+    Default: production
+    Description: Environment name (e.g., development, staging, production)
+    AllowedValues:
+      - development
+      - staging
+      - production
+  InstanceType:
+    Type: String
+    Default: t4g.micro
+    Description: EC2 instance type (t4g is ARM-based Graviton)
+  VPCId:
+    Type: String
+    Default:
+    Description: VPC ID where the EC2 instance will be launched. This will look like vpc-02fxxxxxxx
+  SubnetId:
+    Type: String
+    Description: Subnet ID within the specified VPC, for the EC2 instance. This will look like subnet-05xxxxxxxxxxx
+  Architecture:
+    Type: String
+    Default: aarch64
+    Description: Using aarch64 for Graviton (t4g) type ec2 instances.
+  AmazonLinuxAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Latest Amazon Linux 2023 AMI for the current region for ARM architecture.
+
+Resources:
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-${Disambiguation}-${Environment}-keypair-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub ${ProjectName}-${Disambiguation}-${Environment}-keypair-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:CreateKeyPair
+                  - ec2:DeleteKeyPair
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:UpdateSecret
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:DescribeSecret
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+  CreateKeyPairFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${ProjectName}-${Disambiguation}-${Environment}-keypair-lambda-function
+      Handler: index.handler
+      Runtime: python3.12
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+      Timeout: 30
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+              ec2 = boto3.client('ec2')
+              secretsmanager = boto3.client('secretsmanager')
+              key_name = event['ResourceProperties'].get('KeyPairName', 'default-key-name')
+              secret_name = f'/ec2/privateKey/{key_name}'
+
+              try:
+                  if event['RequestType'] in ['Create', 'Update']:
+                      key = ec2.create_key_pair(KeyName=key_name, KeyFormat='pem')
+                      private_key = key['KeyMaterial']
+                      try:
+                          secretsmanager.create_secret(
+                              Name=secret_name,
+                              Description='EC2 private key for SSH access',
+                              SecretString=private_key
+                          )
+                      except secretsmanager.exceptions.ResourceExistsException:
+                          secretsmanager.update_secret(
+                              SecretId=secret_name,
+                              SecretString=private_key
+                          )
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physicalResourceId=key_name)
+                  elif event['RequestType'] == 'Delete':
+                      try:
+                          ec2.delete_key_pair(KeyName=key_name)
+                      except: pass
+                      try:
+                          secretsmanager.delete_secret(SecretId=secret_name, ForceDeleteWithoutRecovery=True)
+                      except: pass
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physicalResourceId=key_name)
+              except Exception as e:
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Message': str(e)}, physicalResourceId=key_name)
+  KeyPairCustomResource:
+    Type: Custom::KeyPairCreator
+    Properties:
+      ServiceToken: !GetAtt CreateKeyPairFunction.Arn
+      KeyPairName: !Sub ${ProjectName}-${Disambiguation}-${Environment}-keypair
+  EC2IAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-${Disambiguation}-${Environment}-ec2-iam-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: AllowSSMAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:SendCommand
+                  - s3:Get*
+                  - s3:List*
+                Resource: '*'
+        - PolicyName: AllowS3WriteForBackupsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-${Disambiguation}-${Environment}-backups-bucket"
+                  - !Sub "arn:aws:s3:::${ProjectName}-${Disambiguation}-${Environment}-backups-bucket/*"
+
+        - PolicyName: AllowReadSlackSecretPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: 
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:kuma-secret-*"
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub ${ProjectName}-${Disambiguation}-${Environment}-ec2-instance-profile
+      Roles:
+        - !Ref EC2IAMRole
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${ProjectName}-${Disambiguation}-${Environment}-ec2-security-group
+      GroupDescription: Allow SSH, HTTP, and HTTPS
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Disambiguation}-${Environment}-elastic-IP
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName          
+  IPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt ElasticIP.AllocationId
+      InstanceId: !Ref EC2Instance
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: KeyPairCustomResource
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Sub ${ProjectName}-${Disambiguation}-${Environment}-keypair
+      SubnetId: !Ref SubnetId
+      ImageId: !Ref AmazonLinuxAmi
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${Disambiguation}-${Environment}-ec2-instance
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+      UserData: !Base64
+        Fn::Sub: |
+          #!/bin/bash
+          # 1. System Updates and Dependencies ------------------------------------------------------------------------------
+          dnf update -y
+          dnf install -y docker bind-utils sqlite httpd-tools
+          systemctl enable docker
+          systemctl start docker
+          usermod -aG docker ec2-user
+
+          sudo tee /etc/profile.d/python-aliases.sh > /dev/null <<'INNEREOF'
+          alias python="sudo python3"
+          alias py="sudo python3"
+          alias nano="sudo nano"
+          alias sqlite3="sudo sqlite3"
+          INNEREOF
+
+          # 2. Prep for Kuma data management - create directory and set permissions for SQLite DB ---------------------------
+          mkdir -p /opt/kuma-data
+          chown -R 1000:1000 /opt/kuma-data  
+
+          # 3. Install Docker Compose (Architecture Aware)  -----------------------------------------------------------------
+          mkdir -p /usr/local/lib/docker/cli-plugins/
+          curl -SL "https://github.com/docker/compose/releases/download/v5.0.2/docker-compose-linux-${Architecture}" -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+          # 4. Pull Utility Scripts -----------------------------------------------------------------------------------------
+          echo "=== Starting File Download from GitHub public repo ==="
+          UTILS_DIR="/home/ec2-user/utilities"
+          REPO="DrSaurabh/code-blooded"
+          FOLDER="uptime-kuma"
+          BRANCH="main"
+          API_URL="https://api.github.com/repos/$REPO/contents/$FOLDER?ref=$BRANCH"
+          mkdir -p $UTILS_DIR
+
+          echo "Fetching file list from GitHub API..."
+          curl -s "$API_URL" | \
+            python3 -c "
+          import sys, json
+          files = json.load(sys.stdin)
+          for f in files:
+              if f['type'] == 'file':
+                  print(f['download_url'])
+          " | while read url; do
+              fname=$(basename "$url")
+              echo "Downloading $fname..."
+              curl -s -f "$url" -o "$UTILS_DIR/$fname"
+              if [ $? -eq 0 ]; then
+                echo "Successfully downloaded $fname"
+              else
+                echo "Failed to download $fname"
+              fi
+          done
+          find /home/ec2-user/utilities -maxdepth 1 -type f -name "*.py" -exec chmod +x {} +
+
+          # 5. Application Setup --------------------------------------------------------------------------------------------
+          mkdir -p /opt/uptime-stack
+          cd /opt/uptime-stack
+
+          cat <<EOF > docker-compose.yml
+          services:
+            uptime-kuma:
+              image: louislam/uptime-kuma:2.0.2
+              container_name: uptime-kuma
+              restart: always
+              ports:
+                - "127.0.0.1:3001:3001"
+              volumes:
+                - /opt/kuma-data:/app/data
+
+            caddy:
+              image: caddy:2.11-alpine
+              container_name: caddy
+              restart: always
+              ports:
+                - "80:80"
+                - "443:443"
+              volumes:
+                - ./Caddyfile:/etc/caddy/Caddyfile
+                - caddy_data:/data
+                - caddy_config:/config
+              depends_on:
+                - uptime-kuma
+
+          volumes:
+            caddy_data:
+            caddy_config:
+          EOF
+
+          cat <<EOF > Caddyfile
+          ${DomainName} {
+              reverse_proxy uptime-kuma:3001
+          }
+          EOF
+
+          # 6. DNS Guard Logic -----------------------------------------------------------------------------------------------
+          EXPECTED_IP="${ElasticIP}" 
+          echo "Checking DNS for ${DomainName}..."
+          while true; do
+            RESOLVED_IP=$(dig @8.8.8.8 +short "${DomainName}" | grep -E '^[0-9.]+$' | tail -n1)
+            echo "Expected IP: ${!EXPECTED_IP} --- Currently resolving to: ${!RESOLVED_IP}"
+            if [ "${!RESOLVED_IP}" == "${!EXPECTED_IP}" ]; then
+              echo "DNS resolution complete! Proceeding with Caddy and Kuma startup."
+              break
+            fi
+            echo "Waiting for DNS resolution. Sleeping 10s..."
+            sleep 10
+          done
+          docker compose up -d
+
+          # 6. Set some env variables and then get the scripts rolling
+          BACKUP_BUCKET="${ProjectName}-${Disambiguation}-${Environment}-backups-bucket"
+          echo "BACKUP_BUCKET_NAME=$BACKUP_BUCKET" >> /etc/environment
+          export BACKUP_BUCKET_NAME="$BACKUP_BUCKET"
+          while [ ! -d /home/ec2-user ]; do sleep 1; done
+
+          echo "Starting Uptime Kuma setup script..."
+          python3 /home/ec2-user/utilities/kuma-setup.py --run
+          chmod -R 775 /opt/kuma-data
+          chmod g+s /opt/kuma-data  # Set-group-ID bit ensures new files keep the group               
+
+          echo "Starting Uptime Kuma backup script..."
+          python3 /home/ec2-user/utilities/kuma-backup.py
+     
+          echo "UserData script execution finished."
+
+Outputs:
+  Advice:
+    Description:  The Uptime Kuma will be available after this is completed.
+    Value: Go the your DNS provider and add an A record, pointing the domain to the public IPv4 address.
+  DomainName:
+    Description: Access your Uptime Kuma instance here
+    Value: !Sub https://${DomainName}
+  PublicIP:
+    Description: The stable public IPv4 address
+    Value: !Ref ElasticIP
+  EC2InstanceId:
+    Description: EC2 instance ID
+    Value: !Ref EC2Instance
+    Export:
+      Name: !Sub ${ProjectName}-${Disambiguation}-${Environment}-ec2-instance-id
+  EC2InitializationLogsCommand:
+    Description: Run this command via SSH or InstanceConnect to view progress
+    Value: tail -f /var/log/cloud-init-output.log
+  SSHKeyStorage:
+    Description: Private key path in AWS Secrets Manager
+    Value: !Sub /ec2/privateKey/${ProjectName}-${Disambiguation}-${Environment}-keypair

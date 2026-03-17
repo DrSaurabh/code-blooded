@@ -1,0 +1,64 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: |
+  [ v1.3.0 ] 17 Mar 2026 - Persistent S3 Storage for Uptime Kuma Backups
+  Keep ProjectName, Disambiguation and Environment parameters consistent across all three Kuma templates to ensure proper resource linking.
+  Suggested stackname: uptime-kuma-s3-stack
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: uptime-kuma
+    Description: Mandatory tag. Name of the project (lowercase only, hyphens allowed).
+  Disambiguation:
+    Type: String
+    Default: k-01
+    Description: Disambiguation string to ensure unique resource names. (lowercase only, hyphens allowed)
+  Environment:
+    Type: String
+    Default: production
+    Description: Environment name (e.g., development, staging, production)
+    AllowedValues:
+      - development
+      - staging
+      - production
+  Region:
+    Type: String
+    Default: eu-west-2
+    Description: The AWS region where the bucket will reside.
+
+Resources:
+  KumaBackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Disambiguation}-${Environment}-backups-bucket"
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+          - Id: AbortIncompleteMultipartUpload
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+Outputs:
+  BackupBucketName:
+    Description: The name of the backup bucket.
+    Value: !Ref KumaBackupBucket
