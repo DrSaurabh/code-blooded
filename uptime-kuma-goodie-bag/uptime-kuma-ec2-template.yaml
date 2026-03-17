@@ -272,7 +272,7 @@ Resources:
           echo "=== Starting File Download from GitHub public repo ==="
           UTILS_DIR="/home/ec2-user/utilities"
           REPO="DrSaurabh/code-blooded"
-          FOLDER="uptime-kuma"
+          FOLDER="uptime-kuma-goodie-bag"
           BRANCH="main"
           API_URL="https://api.github.com/repos/$REPO/contents/$FOLDER?ref=$BRANCH"
           mkdir -p $UTILS_DIR
